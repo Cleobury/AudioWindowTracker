@@ -1,0 +1,5 @@
+pygetwindow
+screeninfo
+pycaw
+psutil
+pypiwin32

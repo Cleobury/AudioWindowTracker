@@ -13,6 +13,8 @@ import logging
 import pythoncom
 import json
 import win32com.client
+import tkinter as tk
+from tkinter import ttk
 
 # Caching for performance
 _monitor_cache = None
@@ -28,17 +30,18 @@ def get_cached_monitors():
         _last_monitor_check = now
     return _monitor_cache
 
-def get_total_width():
+def get_screen_bounds():
     monitors = get_cached_monitors()
-    return sum(m.width for m in monitors)
-
-def get_max_height():
-    monitors = get_cached_monitors()
-    return max(m.height for m in monitors)
+    min_x = min(m.x for m in monitors)
+    max_x = max(m.x + m.width for m in monitors)
+    min_y = min(m.y for m in monitors)
+    max_y = max(m.y + m.height for m in monitors)
+    return min_x, max_x, min_y, max_y
 
 def apply_directional_audio():
-    total_width = get_total_width()
-    max_height = get_max_height()
+    min_x, max_x, min_y, max_y = get_screen_bounds()
+    total_width = max_x - min_x
+    total_height = max_y - min_y
     
     # 1. Get executable names of processes playing audio
     sessions = AudioUtilities.GetAllSessions()
@@ -60,7 +63,10 @@ def apply_directional_audio():
                 if pid in _process_cache: del _process_cache[pid]
                 
     if not active_audio_sessions_by_exe:
+        logging.debug("No active audio sessions found.")
         return []
+
+    logging.debug(f"Found active audio for exes: {list(active_audio_sessions_by_exe.keys())}")
 
     results = []
     
@@ -104,11 +110,13 @@ def apply_directional_audio():
                 vertical_panning = 0.0 # Center
             else:
                 window_centre_x = win.left + (win.width / 2)
-                panning = (2 * window_centre_x - total_width) / total_width
+                # Normalize X to -1.0 to 1.0 based on total desktop range
+                panning = (2 * (window_centre_x - min_x) - total_width) / total_width
                 panning = max(-1.0, min(1.0, panning))
                 
                 window_centre_y = win.top + (win.height / 2)
-                vertical_panning = (2 * window_centre_y - max_height) / max_height
+                # Normalize Y to -1.0 to 1.0 based on total desktop range
+                vertical_panning = (2 * (window_centre_y - min_y) - total_height) / total_height
                 vertical_panning = max(-1.0, min(1.0, vertical_panning))
 
             # Calculate target L / R volumes based on X-axis panning
@@ -174,17 +182,27 @@ def apply_directional_audio():
                 "left_vol": left_vol,
                 "right_vol": right_vol
             })
+            logging.debug(f"Panned {win_exe}: {panning:.2f} (L:{left_vol:.2f} R:{right_vol:.2f})")
             
     return results
 
 
-# Setup logging to a file in the app directory
-log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.log")
-logging.basicConfig(
-    filename=log_path,
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# Setup logging
+def setup_logging():
+    app_data = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "AudioWindowTracker")
+    if not os.path.exists(app_data):
+        os.makedirs(app_data)
+    
+    log_path = os.path.join(app_data, "debug.log")
+    logging.basicConfig(
+        filename=log_path,
+        level=logging.DEBUG,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+    return log_path
+
+log_path = setup_logging()
+logging.info("--- Application Starting ---")
 
 # Settings Management
 settings_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
@@ -241,14 +259,87 @@ def toggle_autostart(icon, item):
         except Exception as e:
             logging.error(f"Failed to create startup shortcut: {e}")
 
+# Overlay Implementation
+class Overlay:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Audio Tracker Overlay")
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        self.root.attributes("-alpha", 0.9)
+        self.root.attributes("-transparentcolor", "black") # Click-through on Windows
+        
+        # Black background, lime text
+        self.root.configure(bg='black')
+        
+        self.label = tk.Label(
+            self.root, 
+            text="Waiting for audio...", 
+            font=("Consolas", 10, "bold"), 
+            fg="#00FF00", 
+            bg="black", 
+            justify=tk.LEFT,
+            padx=10,
+            pady=10
+        )
+        self.label.pack()
+        
+        # Position in bottom right of primary monitor
+        self.update_position()
+        self.visible = False
+        self.root.withdraw()
+
+    def update_position(self):
+        self.root.update_idletasks()
+        # Get primary monitor (usually the one at 0,0 or we can just use the first)
+        monitors = get_cached_monitors()
+        primary = monitors[0] # Assume first is primary for overlay
+        
+        x = primary.x + primary.width - self.root.winfo_width() - 20
+        y = primary.y + primary.height - self.root.winfo_height() - 40
+        self.root.geometry(f"+{int(x)}+{int(y)}")
+
+    def toggle(self):
+        if self.visible:
+            self.root.withdraw()
+        else:
+            self.root.deiconify()
+            self.root.lift()
+        self.visible = not self.visible
+
+    def update_data(self, results):
+        if not self.visible:
+            return
+            
+        display_text = "Audio Tracking\n" + "-"*20 + "\n"
+        for res in results:
+            pan_str = f"L < {abs(res['panning']):.2f} > R" if res['panning'] != 0 else "  Centered  "
+            if res['panning'] < -0.05:
+                pan_str = f"L {abs(res['panning'])*100:>2.0f}% [===        ]"
+            elif res['panning'] > 0.05:
+                pan_str = f"R {abs(res['panning'])*100:>2.0f}% [        ===]"
+            else:
+                pan_str = f"Center  [    =     ]"
+                
+            display_text += f"{res['exe'][:15]:<15} | {pan_str}\n"
+        
+        self.label.config(text=display_text.strip())
+        self.update_position()
+
+visualizer_instance = None
+visualizer_root = None
+
+def toggle_overlay(icon, item):
+    if visualizer_instance:
+        visualizer_instance.toggle()
+
 # Global control for the background thread
 running = True
 tracker_thread = None
 
 def run_tracker():
     """Background loop for audio tracking."""
-    global running
-    load_settings()
+    global running, visualizer_instance
     logging.info("Tracker thread started.")
     
     # Initialize COM for this thread
@@ -269,6 +360,8 @@ def run_tracker():
                 for p in dead_pids: del _process_cache[p]
 
             results = apply_directional_audio()
+            if results and visualizer_instance:
+                visualizer_root.after(0, visualizer_instance.update_data, results)
             if results:
                 logging.debug(f"Panned {len(results)} windows.")
         except Exception as e:
@@ -302,6 +395,11 @@ def setup_tray():
     else:
         image = Image.open(icon_path)
 
+    # Initialize Visualizer in main thread
+    global visualizer_instance, visualizer_root
+    visualizer_root = tk.Tk()
+    visualizer_instance = Overlay(visualizer_root)
+
     intensity_menu = pystray.Menu(
         pystray.MenuItem("Low", set_intensity, checked=lambda item: current_settings["intensity"] == "Low", radio=True),
         pystray.MenuItem("Medium", set_intensity, checked=lambda item: current_settings["intensity"] == "Medium", radio=True),
@@ -312,6 +410,7 @@ def setup_tray():
         pystray.MenuItem("Audio Window Tracker", lambda: None, enabled=False),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Intensity", intensity_menu),
+        pystray.MenuItem("Toggle Overlay", toggle_overlay),
         pystray.MenuItem("Start with Windows", toggle_autostart, checked=lambda item: is_autostart_enabled()),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit", on_quit)
@@ -324,7 +423,12 @@ def setup_tray():
     tracker_thread = threading.Thread(target=run_tracker, daemon=True)
     tracker_thread.start()
 
-    icon.run()
+    # Start tray in background thread (Tkinter likes the main thread better)
+    tray_thread = threading.Thread(target=icon.run, daemon=True)
+    tray_thread.start()
+
+    # Tkinter main loop MUST be on the main thread for reliability
+    visualizer_root.mainloop()
 
 if __name__ == "__main__":
     setup_tray()

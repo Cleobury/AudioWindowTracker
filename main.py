@@ -14,33 +14,50 @@ import pythoncom
 import json
 import win32com.client
 
+# Caching for performance
+_monitor_cache = None
+_last_monitor_check = 0
+_process_cache = {} # pid -> psutil.Process
+_window_exe_cache = {} # hwnd -> exe_name
+
+def get_cached_monitors():
+    global _monitor_cache, _last_monitor_check
+    now = time.time()
+    if _monitor_cache is None or now - _last_monitor_check > 5:
+        _monitor_cache = get_monitors()
+        _last_monitor_check = now
+    return _monitor_cache
+
 def get_total_width():
-    monitors = get_monitors()
-    total_width = sum(m.width for m in monitors)
-    return total_width
+    monitors = get_cached_monitors()
+    return sum(m.width for m in monitors)
 
 def get_max_height():
-    monitors = get_monitors()
-    max_height = max(m.height for m in monitors)
-    return max_height
+    monitors = get_cached_monitors()
+    return max(m.height for m in monitors)
 
 def apply_directional_audio():
     total_width = get_total_width()
     max_height = get_max_height()
     
-    # 1. Get executable names of processes playing audio and their corresponding sessions
+    # 1. Get executable names of processes playing audio
     sessions = AudioUtilities.GetAllSessions()
     active_audio_sessions_by_exe = {}
     
     for session in sessions:
         if session.Process and session.State == 1: # Actively playing
             try:
-                exe_name = session.Process.name().lower()
+                # Use psutil cache
+                pid = session.ProcessId
+                if pid not in _process_cache:
+                    _process_cache[pid] = psutil.Process(pid)
+                
+                exe_name = _process_cache[pid].name().lower()
                 if exe_name not in active_audio_sessions_by_exe:
                     active_audio_sessions_by_exe[exe_name] = []
                 active_audio_sessions_by_exe[exe_name].append(session)
-            except psutil.NoSuchProcess:
-                pass
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                if pid in _process_cache: del _process_cache[pid]
                 
     if not active_audio_sessions_by_exe:
         return []
@@ -50,31 +67,34 @@ def apply_directional_audio():
     # 2. Get all visible windows
     windows = gw.getAllWindows()
     seen_exes = set()
+    current_monitors = get_cached_monitors()
     
     for win in windows:
         if not win.visible or not win.title:
             continue
             
-        # Get PID for this window
-        _, pid = win32process.GetWindowThreadProcessId(win._hWnd)
-        
-        try:
-            win_exe = psutil.Process(pid).name().lower()
-        except psutil.NoSuchProcess:
-            win_exe = ""
+        hwnd = win._hWnd
+        if hwnd in _window_exe_cache:
+            win_exe = _window_exe_cache[hwnd]
+        else:
+            # Get PID for this window
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            try:
+                if pid not in _process_cache:
+                    _process_cache[pid] = psutil.Process(pid)
+                win_exe = _process_cache[pid].name().lower()
+                _window_exe_cache[hwnd] = win_exe
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                win_exe = ""
+                if pid in _process_cache: del _process_cache[pid]
             
         if win_exe in active_audio_sessions_by_exe and win_exe not in seen_exes:
-            # We use the first visible window we find for a given executable to calculate panning
             seen_exes.add(win_exe)
             
-            # Check if minimized. Windows moves minimized windows to -32000
-            # Check if fullscreen/borderless. If the window is >= the total width of a single monitor, or covers the primary screen
+            # Panning logic
             is_minimized = win.left <= -30000
-            
-            # We can check if it's fullscreen by seeing if its width and height match any monitor
-            # or if it's exceptionally large
             is_fullscreen = False
-            for m in get_monitors():
+            for m in current_monitors:
                 if win.width >= m.width and win.height >= m.height:
                     is_fullscreen = True
                     break
@@ -241,12 +261,19 @@ def run_tracker():
 
     while running:
         try:
+            # Clear window/process caches occasionally to handle closed windows
+            if time.time() % 30 < 0.2:
+                _window_exe_cache.clear()
+                # Prune dead processes from cache
+                dead_pids = [p for p in _process_cache if not psutil.pid_exists(p)]
+                for p in dead_pids: del _process_cache[p]
+
             results = apply_directional_audio()
             if results:
                 logging.debug(f"Panned {len(results)} windows.")
         except Exception as e:
             logging.error(f"Error in tracking loop: {e}", exc_info=True)
-        time.sleep(0.1)
+        time.sleep(0.15) # Increased sleep slightly
     
     pythoncom.CoUninitialize()
     logging.info("Tracker thread stopping.")

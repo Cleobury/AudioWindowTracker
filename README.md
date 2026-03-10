@@ -24,3 +24,6 @@ Since browsers like Chrome and Edge bundle all their tabs into one audio "stream
 
 ## Requirements
 - Windows 10 or 11
+
+## License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

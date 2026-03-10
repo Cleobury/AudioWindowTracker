@@ -11,6 +11,7 @@ import os
 import sys
 import logging
 import pythoncom
+import json
 
 def get_total_width():
     monitors = get_monitors()
@@ -91,13 +92,11 @@ def apply_directional_audio():
 
             # Calculate target L / R volumes based on X-axis panning
             # panning: -1.0 (Full Left) to 1.0 (Full Right)
-            # Instead of dropping to 0.0, let's keep a minimum volume on the opposite side (e.g., 0.2)
-            min_vol = 0.2
-            range_vol = 1.0 - min_vol
             
-            # center position (panning = 0) gives 1.0 to both
-            # far right position (panning = 1) gives 1.0 to right, min_vol to left
-            # far left position (panning = -1) gives min_vol to right, 1.0 to left
+            # Use dynamic min_vol from settings
+            intensity = current_settings.get("intensity", "Medium")
+            min_vol = 0.5 if intensity == "Low" else (0.2 if intensity == "Medium" else 0.0)
+            range_vol = 1.0 - min_vol
             
             if panning > 0:
                 target_left = 1.0 - (panning * range_vol)
@@ -166,6 +165,26 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
+# Settings Management
+settings_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+current_settings = {"intensity": "Medium"}
+
+def load_settings():
+    global current_settings
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path, 'r') as f:
+                current_settings = json.load(f)
+        except Exception as e:
+            logging.error(f"Failed to load settings: {e}")
+
+def save_settings():
+    try:
+        with open(settings_path, 'w') as f:
+            json.dump(current_settings, f)
+    except Exception as e:
+        logging.error(f"Failed to save settings: {e}")
+
 # Global control for the background thread
 running = True
 tracker_thread = None
@@ -173,6 +192,7 @@ tracker_thread = None
 def run_tracker():
     """Background loop for audio tracking."""
     global running
+    load_settings()
     logging.info("Tracker thread started.")
     
     # Initialize COM for this thread
@@ -202,19 +222,33 @@ def on_quit(icon, item):
     icon.stop()
     sys.exit(0)
 
+def set_intensity(icon, item):
+    global current_settings
+    current_settings["intensity"] = item.text
+    save_settings()
+    logging.info(f"Intensity set to {item.text}")
+
 def setup_tray():
     """Initializes and runs the system tray icon."""
+    load_settings() # Load before building menu
+
     # Build icon
-    # Try to find the generated icon, otherwise use a fallback
     icon_path = os.path.join(os.path.dirname(__file__), "app_icon.png")
     if not os.path.exists(icon_path):
-        # Fallback to a simple blue square if icon missing
         image = Image.new('RGB', (64, 64), (0, 120, 215))
     else:
         image = Image.open(icon_path)
 
+    intensity_menu = pystray.Menu(
+        pystray.MenuItem("Low", set_intensity, checked=lambda item: current_settings["intensity"] == "Low", radio=True),
+        pystray.MenuItem("Medium", set_intensity, checked=lambda item: current_settings["intensity"] == "Medium", radio=True),
+        pystray.MenuItem("High", set_intensity, checked=lambda item: current_settings["intensity"] == "High", radio=True)
+    )
+
     menu = pystray.Menu(
         pystray.MenuItem("Audio Window Tracker", lambda: None, enabled=False),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Intensity", intensity_menu),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit", on_quit)
     )

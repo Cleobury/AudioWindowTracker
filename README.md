@@ -1,40 +1,26 @@
 # Audio Window Tracker
 
-A Windows-native background service that tracks the position of audio-producing windows on your multi-monitor setup and automatically adjusts the left and right audio channels to create a 2D spatial / directional audio effect.
+Ever wish your audio actually came from where the window is on your screen? This little tool tracks your open apps across your monitors and pans their sound to match their position. If you move a video to your left monitor, the sound follows.
 
-## Features
-- **Horizontal Panning**: Automatically maps audio left/right balance based on the window's physical X coordinate.
-- **System Tray Icon**: Runs silently in the background with a convenient taskbar icon.
-- **Adjustable Intensity**: Choose between Low, Medium, or High panning strength.
-- **Vertical Distance Attenuation**: Simulates Y-axis distance by subtly lowering overall volume.
-- **Exponential Smoothing**: Prevents jarring audio jumps when dragging windows.
-- **Minimized & Fullscreen Handling**: Automatically centers audio when windows are minimized or fullscreen.
+## What it does
+- **Smooth Panning**: Moves your audio left and right as you drag windows.
+- **Vertical Depth**: Subtly lowers volume if an app is way up or down on your screen.
+- **Smart Detection**: Centers the audio automatically when you go full-screen or minimize.
+- **Set & Forget**: Runs quietly in your system tray without getting in the way.
 
-## Installation & Setup
+## Getting Started
+1. **Download**: Grab `AudioWindowTracker.exe`.
+2. **Run**: Double-click to start. You'll see a new icon in your tray (bottom right).
+3. **Autostart**: Right-click the tray icon and check **Start with Windows** if you want it to always be ready.
 
-### For Most Users (Recommended)
-1. Download the latest `AudioWindowTracker.exe`.
-2. Move it to a folder of your choice (e.g., `C:\Apps\AudioTracker`).
-3. Double-click to run. It will appear as an icon in your system tray (bottom right).
+## Settings
+Right-click the tray icon to tweak the **Intensity**:
+- **Low**: A subtle, gentle pan.
+- **Medium**: Fixed-point balance (default).
+- **High**: Full-strength directional audio.
 
-### Enabling Autostart
-To have the app start automatically with Windows:
-1. Right-click the tray icon.
-2. Check **Start with Windows**.
-
-## How to Use
-1. **Launch**: Open `AudioWindowTracker.exe`.
-2. **Settings**: Right-click the tray icon to change settings:
-   - **Intensity**:
-     - **Low**: Subtle effect (minimum 50% volume).
-     - **Medium**: Balanced (minimum 20% volume).
-     - **High**: Maximum effect (minimum 0% volume).
-   - **Start with Windows**: Toggle automatic startup.
-3. **Exit**: Right-click the tray icon and select **Quit**.
-
-## Note on Browser Audio
-Modern browsers (Chrome, Edge, Brave, etc.) mix all tab audio into a single Windows Core Audio session. The tracker will target the first visible window it finds for that browser executable. To track multiple streams independently, use different browsers (e.g., Brave on the left, Edge on the right).
+## A Quick Note on Browsers
+Since browsers like Chrome and Edge bundle all their tabs into one audio "stream," the tracker will follow whichever window of that browser you opened first. To track two different things (like Discord and a YouTube video), try using different browsers for each!
 
 ## Requirements
-- Windows 10/11
-- Active audio sessions (the app must be making sound to be panned)
+- Windows 10 or 11

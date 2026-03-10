@@ -3,3 +3,7 @@ screeninfo
 pycaw
 psutil
 pypiwin32
+pywin32
+pystray
+Pillow
+pyinstaller

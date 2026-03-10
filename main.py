@@ -4,6 +4,13 @@ from pycaw.pycaw import AudioUtilities
 import win32process
 import psutil
 import time
+import threading
+import pystray
+from PIL import Image
+import os
+import sys
+import logging
+import pythoncom
 
 def get_total_width():
     monitors = get_monitors()
@@ -150,21 +157,76 @@ def apply_directional_audio():
             
     return results
 
-if __name__ == "__main__":
-    print("Tracking audio source windows with Directional Audio...")
+
+# Setup logging to a file in the app directory
+log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.log")
+logging.basicConfig(
+    filename=log_path,
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+# Global control for the background thread
+running = True
+tracker_thread = None
+
+def run_tracker():
+    """Background loop for audio tracking."""
+    global running
+    logging.info("Tracker thread started.")
+    
+    # Initialize COM for this thread
     try:
-        while True:
-            audio_windows = apply_directional_audio()
-            print("\033[K", end="") # Clear line
-            if not audio_windows:
-                print("No active audio sources found.", end="\r")
-            else:
-                info = []
-                for aw in audio_windows:
-                    pan = aw['panning']
-                    direction = "Left" if pan < 0 else "Right"
-                    info.append(f"[{aw['title']}: {pan:.2f} (L: {aw['left_vol']:.2f}, R: {aw['right_vol']:.2f})]")
-                print(" | ".join(info), end="\r")
-            time.sleep(0.1)
-    except KeyboardInterrupt:
-        print("\nStopped.")
+        pythoncom.CoInitialize()
+        logging.info("COM initialized in tracker thread.")
+    except Exception as e:
+        logging.error(f"Failed to initialize COM: {e}")
+        return
+
+    while running:
+        try:
+            results = apply_directional_audio()
+            if results:
+                logging.debug(f"Panned {len(results)} windows.")
+        except Exception as e:
+            logging.error(f"Error in tracking loop: {e}", exc_info=True)
+        time.sleep(0.1)
+    
+    pythoncom.CoUninitialize()
+    logging.info("Tracker thread stopping.")
+
+def on_quit(icon, item):
+    """Callback to shut down the application."""
+    global running
+    running = False
+    icon.stop()
+    sys.exit(0)
+
+def setup_tray():
+    """Initializes and runs the system tray icon."""
+    # Build icon
+    # Try to find the generated icon, otherwise use a fallback
+    icon_path = os.path.join(os.path.dirname(__file__), "app_icon.png")
+    if not os.path.exists(icon_path):
+        # Fallback to a simple blue square if icon missing
+        image = Image.new('RGB', (64, 64), (0, 120, 215))
+    else:
+        image = Image.open(icon_path)
+
+    menu = pystray.Menu(
+        pystray.MenuItem("Audio Window Tracker", lambda: None, enabled=False),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Quit", on_quit)
+    )
+
+    icon = pystray.Icon("AudioTracker", image, "Audio Window Tracker", menu)
+    
+    # Start tracker in background thread
+    global tracker_thread
+    tracker_thread = threading.Thread(target=run_tracker, daemon=True)
+    tracker_thread.start()
+
+    icon.run()
+
+if __name__ == "__main__":
+    setup_tray()

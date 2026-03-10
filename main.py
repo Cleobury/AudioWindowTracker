@@ -9,6 +9,7 @@ import pystray
 from PIL import Image
 import os
 import sys
+import ctypes
 import logging
 import pythoncom
 import json
@@ -63,17 +64,19 @@ def apply_directional_audio():
                 active_audio_sessions_by_exe[exe_name].append(session)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 if pid in _process_cache: del _process_cache[pid]
-                
     if not active_audio_sessions_by_exe:
-        logging.debug("No active audio sessions found.")
+        if time.time() % 10 < 0.3: # Log every ~10s to avoid spam
+            logging.info("No active audio sessions found.")
         return []
 
-    logging.debug(f"Found active audio for exes: {list(active_audio_sessions_by_exe.keys())}")
+    logging.info(f"Tracking audio for: {list(active_audio_sessions_by_exe.keys())}")
 
     results = []
     
     # 2. Get all visible windows efficiently using win32gui
     panned_windows = []
+    seen_exes = set()
+    current_monitors = get_cached_monitors()
     
     def enum_windows_callback(hwnd, _):
         if not win32gui.IsWindowVisible(hwnd):
@@ -126,6 +129,7 @@ def apply_directional_audio():
 
             # Calculation continues in results mapping...
             panned_windows.append({
+                "hwnd": hwnd,
                 "exe": win_exe,
                 "title": title,
                 "panning": panning,
@@ -134,8 +138,23 @@ def apply_directional_audio():
 
     win32gui.EnumWindows(enum_windows_callback, None)
     
+    # Prioritize windows: Topmost (Z-order) / Active window first
+    try:
+        active_hwnd = win32gui.GetForegroundWindow()
+    except:
+        active_hwnd = None
+
+    final_windows = {} # exe -> win_data
     for win_data in panned_windows:
-        win_exe = win_data['exe']
+        exe = win_data['exe']
+        if exe not in final_windows:
+            final_windows[exe] = win_data
+        else:
+            # If current win is active, or we don't have an active one yet, prefer higher Z-order (first found)
+            if win_data['hwnd'] == active_hwnd:
+                final_windows[exe] = win_data
+    
+    for win_exe, win_data in final_windows.items():
         panning = win_data['panning']
         vertical_panning = win_data['vertical_panning']
 
@@ -218,6 +237,15 @@ def setup_logging():
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     return log_path
+
+# Set DPI Awareness
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(1)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
 
 log_path = setup_logging()
 logging.info("--- Application Starting ---")
@@ -310,12 +338,12 @@ class Overlay:
 
     def update_position(self):
         self.root.update_idletasks()
-        # Get primary monitor (usually the one at 0,0 or we can just use the first)
         monitors = get_cached_monitors()
-        primary = monitors[0] # Assume first is primary for overlay
+        primary = monitors[0]
         
+        # Position in top right
         x = primary.x + primary.width - self.root.winfo_width() - 20
-        y = primary.y + primary.height - self.root.winfo_height() - 40
+        y = primary.y + 40 # Offset from top
         self.root.geometry(f"+{int(x)}+{int(y)}")
 
     def toggle(self):
@@ -334,15 +362,8 @@ class Overlay:
             
         display_text = "Audio Tracking\n" + "-"*20 + "\n"
         for res in results:
-            pan_str = f"L < {abs(res['panning']):.2f} > R" if res['panning'] != 0 else "  Centered  "
-            if res['panning'] < -0.05:
-                pan_str = f"L {abs(res['panning'])*100:>2.0f}% [===        ]"
-            elif res['panning'] > 0.05:
-                pan_str = f"R {abs(res['panning'])*100:>2.0f}% [        ===]"
-            else:
-                pan_str = f"Center  [    =     ]"
-                
-            display_text += f"{res['exe'][:15]:<15} | {pan_str}\n"
+            display_text += f"{res['exe']}\n"
+            display_text += f"Pan: {res['panning']:+.2f} | L:{res['left_vol']:.2f} R:{res['right_vol']:.2f}\n\n"
         
         self.label.config(text=display_text.strip())
         self.update_position()

@@ -12,6 +12,7 @@ import sys
 import logging
 import pythoncom
 import json
+import win32com.client
 
 def get_total_width():
     monitors = get_monitors()
@@ -185,6 +186,41 @@ def save_settings():
     except Exception as e:
         logging.error(f"Failed to save settings: {e}")
 
+# Startup Management
+def get_startup_path():
+    return os.path.join(os.environ["APPDATA"], "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "AudioWindowTracker.lnk")
+
+def is_autostart_enabled():
+    return os.path.exists(get_startup_path())
+
+def toggle_autostart(icon, item):
+    path = get_startup_path()
+    if is_autostart_enabled():
+        try:
+            os.remove(path)
+            logging.info("Startup shortcut removed.")
+        except Exception as e:
+            logging.error(f"Failed to remove startup shortcut: {e}")
+    else:
+        try:
+            # Need to get the path of the current executable
+            if getattr(sys, 'frozen', False):
+                # Running as exe
+                exe_path = sys.executable
+            else:
+                # Running as script
+                exe_path = os.path.abspath(sys.argv[0])
+            
+            shell = win32com.client.Dispatch("WScript.Shell")
+            shortcut = shell.CreateShortcut(path)
+            shortcut.TargetPath = exe_path
+            shortcut.WorkingDirectory = os.path.dirname(exe_path)
+            shortcut.IconLocation = exe_path
+            shortcut.Save()
+            logging.info(f"Startup shortcut created for {exe_path}")
+        except Exception as e:
+            logging.error(f"Failed to create startup shortcut: {e}")
+
 # Global control for the background thread
 running = True
 tracker_thread = None
@@ -249,6 +285,7 @@ def setup_tray():
         pystray.MenuItem("Audio Window Tracker", lambda: None, enabled=False),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Intensity", intensity_menu),
+        pystray.MenuItem("Start with Windows", toggle_autostart, checked=lambda item: is_autostart_enabled()),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit", on_quit)
     )

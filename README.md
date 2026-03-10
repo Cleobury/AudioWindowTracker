@@ -19,15 +19,17 @@ A Windows-native background service that tracks the position of audio-producing 
 
 ### Enabling Autostart
 To have the app start automatically with Windows:
-1. Open the `scripts` folder.
-2. Right-click `enable_autostart.ps1` and select **Run with PowerShell**.
+1. Right-click the tray icon.
+2. Check **Start with Windows**.
 
 ## How to Use
 1. **Launch**: Open `AudioWindowTracker.exe`.
-2. **Settings**: Right-click the tray icon to change the **Intensity**:
-   - **Low**: Subtle effect (minimum 50% volume on opposite side).
-   - **Medium**: Balanced (minimum 20% volume).
-   - **High**: Maximum effect (minimum 0% volume).
+2. **Settings**: Right-click the tray icon to change settings:
+   - **Intensity**:
+     - **Low**: Subtle effect (minimum 50% volume).
+     - **Medium**: Balanced (minimum 20% volume).
+     - **High**: Maximum effect (minimum 0% volume).
+   - **Start with Windows**: Toggle automatic startup.
 3. **Exit**: Right-click the tray icon and select **Quit**.
 
 ## Note on Browser Audio

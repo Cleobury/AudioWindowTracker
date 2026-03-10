@@ -15,6 +15,8 @@ import json
 import win32com.client
 import tkinter as tk
 from tkinter import ttk
+import win32gui
+import win32con
 
 # Caching for performance
 _monitor_cache = None
@@ -70,20 +72,25 @@ def apply_directional_audio():
 
     results = []
     
-    # 2. Get all visible windows
-    windows = gw.getAllWindows()
-    seen_exes = set()
-    current_monitors = get_cached_monitors()
+    # 2. Get all visible windows efficiently using win32gui
+    panned_windows = []
     
-    for win in windows:
-        if not win.visible or not win.title:
-            continue
+    def enum_windows_callback(hwnd, _):
+        if not win32gui.IsWindowVisible(hwnd):
+            return
+        
+        title = win32gui.GetWindowText(hwnd)
+        if not title:
+            return
             
-        hwnd = win._hWnd
+        rect = win32gui.GetWindowRect(hwnd)
+        win_left, win_top, win_right, win_bottom = rect
+        win_width = win_right - win_left
+        win_height = win_bottom - win_top
+        
         if hwnd in _window_exe_cache:
             win_exe = _window_exe_cache[hwnd]
         else:
-            # Get PID for this window
             _, pid = win32process.GetWindowThreadProcessId(hwnd)
             try:
                 if pid not in _process_cache:
@@ -93,96 +100,107 @@ def apply_directional_audio():
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 win_exe = ""
                 if pid in _process_cache: del _process_cache[pid]
-            
+        
         if win_exe in active_audio_sessions_by_exe and win_exe not in seen_exes:
             seen_exes.add(win_exe)
             
             # Panning logic
-            is_minimized = win.left <= -30000
+            is_minimized = win_left <= -30000
             is_fullscreen = False
             for m in current_monitors:
-                if win.width >= m.width and win.height >= m.height:
+                if win_width >= m.width and win_height >= m.height:
                     is_fullscreen = True
                     break
 
             if is_minimized or is_fullscreen:
-                panning = 0.0 # Center
-                vertical_panning = 0.0 # Center
+                panning = 0.0
+                vertical_panning = 0.0
             else:
-                window_centre_x = win.left + (win.width / 2)
-                # Normalize X to -1.0 to 1.0 based on total desktop range
+                window_centre_x = win_left + (win_width / 2)
                 panning = (2 * (window_centre_x - min_x) - total_width) / total_width
                 panning = max(-1.0, min(1.0, panning))
                 
-                window_centre_y = win.top + (win.height / 2)
-                # Normalize Y to -1.0 to 1.0 based on total desktop range
+                window_centre_y = win_top + (win_height / 2)
                 vertical_panning = (2 * (window_centre_y - min_y) - total_height) / total_height
                 vertical_panning = max(-1.0, min(1.0, vertical_panning))
 
-            # Calculate target L / R volumes based on X-axis panning
-            # panning: -1.0 (Full Left) to 1.0 (Full Right)
-            
-            # Use dynamic min_vol from settings
-            intensity = current_settings.get("intensity", "Medium")
-            min_vol = 0.5 if intensity == "Low" else (0.2 if intensity == "Medium" else 0.0)
-            range_vol = 1.0 - min_vol
-            
-            if panning > 0:
-                target_left = 1.0 - (panning * range_vol)
-                target_right = 1.0
-            else:
-                target_left = 1.0
-                target_right = 1.0 + (panning * range_vol)
-                
-            # Apply Vertical Volume Attenuation
-            # vertical_panning: 0.0 is center, -1.0 is top, 1.0 is bottom
-            # Max drop is 20% (multiplier goes from 1.0 down to 0.8)
-            y_distance = abs(vertical_panning)
-            vertical_multiplier = 1.0 - (y_distance * 0.2)
-            
-            target_left *= vertical_multiplier
-            target_right *= vertical_multiplier
-                
-            # Apply Smoothing (EMA)
-            smoothing_factor = 0.3 # 0.0 to 1.0. Lower means slower/smoother transitions
-
-            # Retrieve existing volumes instead of jumping straight to the target
-            # If we don't know the current state, we assume the target to start.
-            try:
-                # Get the first session to check current volume
-                first_session = active_audio_sessions_by_exe[win_exe][0]
-                vol_ctrl = first_session.channelAudioVolume()
-                if vol_ctrl.GetChannelCount() >= 2:
-                    current_left = vol_ctrl.GetChannelVolume(0)
-                    current_right = vol_ctrl.GetChannelVolume(1)
-                else:
-                    current_left, current_right = target_left, target_right
-            except Exception:
-                current_left, current_right = target_left, target_right
-
-            # Calculate the new smoothed volume
-            left_vol = current_left + smoothing_factor * (target_left - current_left)
-            right_vol = current_right + smoothing_factor * (target_right - current_right)
-            
-            # Apply to all audio sessions assigned to this executable
-            for session in active_audio_sessions_by_exe[win_exe]:
-                try:
-                    vol_ctrl = session.channelAudioVolume()
-                    channels = vol_ctrl.GetChannelCount()
-                    if channels >= 2:
-                        vol_ctrl.SetChannelVolume(0, left_vol, None)
-                        vol_ctrl.SetChannelVolume(1, right_vol, None)
-                except Exception as e:
-                    pass
-
-            results.append({
-                "title": win.title,
+            # Calculation continues in results mapping...
+            panned_windows.append({
                 "exe": win_exe,
+                "title": title,
                 "panning": panning,
-                "left_vol": left_vol,
-                "right_vol": right_vol
+                "vertical_panning": vertical_panning
             })
-            logging.debug(f"Panned {win_exe}: {panning:.2f} (L:{left_vol:.2f} R:{right_vol:.2f})")
+
+    win32gui.EnumWindows(enum_windows_callback, None)
+    
+    for win_data in panned_windows:
+        win_exe = win_data['exe']
+        panning = win_data['panning']
+        vertical_panning = win_data['vertical_panning']
+
+        # Use dynamic min_vol from settings
+        intensity = current_settings.get("intensity", "Medium")
+        min_vol = 0.5 if intensity == "Low" else (0.2 if intensity == "Medium" else 0.0)
+        range_vol = 1.0 - min_vol
+        
+        if panning > 0:
+            target_left = 1.0 - (panning * range_vol)
+            target_right = 1.0
+        else:
+            target_left = 1.0
+            target_right = 1.0 + (panning * range_vol)
+            
+        # Apply Vertical Volume Attenuation
+        # vertical_panning: 0.0 is center, -1.0 is top, 1.0 is bottom
+        # Max drop is 20% (multiplier goes from 1.0 down to 0.8)
+        y_distance = abs(vertical_panning)
+        vertical_multiplier = 1.0 - (y_distance * 0.2)
+        
+        target_left *= vertical_multiplier
+        target_right *= vertical_multiplier
+            
+        # Apply Smoothing (EMA)
+        smoothing_factor = 0.3 # 0.0 to 1.0. Lower means slower/smoother transitions
+
+        # Retrieve existing volumes instead of jumping straight to the target
+        # If we don't know the current state, we assume the target to start.
+        try:
+            # Get the first session to check current volume
+            first_session = active_audio_sessions_by_exe[win_exe][0]
+            vol_ctrl = first_session.channelAudioVolume()
+            if vol_ctrl.GetChannelCount() >= 2:
+                current_left = vol_ctrl.GetChannelVolume(0)
+                current_right = vol_ctrl.GetChannelVolume(1)
+            else:
+                current_left, current_right = target_left, target_right
+        except Exception:
+            current_left, current_right = target_left, target_right
+
+        # Calculate the new smoothed volume
+        left_vol = current_left + smoothing_factor * (target_left - current_left)
+        right_vol = current_right + smoothing_factor * (target_right - current_right)
+        
+        # Apply to all audio sessions assigned to this executable
+        for session in active_audio_sessions_by_exe[win_exe]:
+            try:
+                vol_ctrl = session.channelAudioVolume()
+                channels = vol_ctrl.GetChannelCount()
+                if channels >= 2:
+                    vol_ctrl.SetChannelVolume(0, left_vol, None)
+                    vol_ctrl.SetChannelVolume(1, right_vol, None)
+            except Exception as e:
+                pass
+
+        results.append({
+            "title": win_data['title'],
+            "exe": win_exe,
+            "panning": panning,
+            "left_vol": left_vol,
+            "right_vol": right_vol
+        })
+            # Reduced logging
+            # logging.debug(f"Panned {win_exe}: {panning:.2f} (L:{left_vol:.2f} R:{right_vol:.2f})")
             
     return results
 
@@ -196,7 +214,7 @@ def setup_logging():
     log_path = os.path.join(app_data, "debug.log")
     logging.basicConfig(
         filename=log_path,
-        level=logging.DEBUG,
+        level=logging.INFO, # Reduced logging for performance
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     return log_path
@@ -287,6 +305,7 @@ class Overlay:
         # Position in bottom right of primary monitor
         self.update_position()
         self.visible = False
+        self.last_update_time = 0
         self.root.withdraw()
 
     def update_position(self):
@@ -308,8 +327,10 @@ class Overlay:
         self.visible = not self.visible
 
     def update_data(self, results):
-        if not self.visible:
+        now = time.time()
+        if not self.visible or now - self.last_update_time < 0.5:
             return
+        self.last_update_time = now
             
         display_text = "Audio Tracking\n" + "-"*20 + "\n"
         for res in results:
@@ -362,11 +383,9 @@ def run_tracker():
             results = apply_directional_audio()
             if results and visualizer_instance:
                 visualizer_root.after(0, visualizer_instance.update_data, results)
-            if results:
-                logging.debug(f"Panned {len(results)} windows.")
         except Exception as e:
             logging.error(f"Error in tracking loop: {e}", exc_info=True)
-        time.sleep(0.15) # Increased sleep slightly
+        time.sleep(0.25) # Increased sleep to reduce CPU usage
     
     pythoncom.CoUninitialize()
     logging.info("Tracker thread stopping.")

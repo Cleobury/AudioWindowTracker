@@ -440,12 +440,17 @@ def reset_all_balances():
 
 def on_quit(icon, item):
     """Callback to shut down the application."""
-    global running
+    global running, visualizer_root
     logging.info("Quit requested. Resetting balances...")
     reset_all_balances()
     running = False
+    
+    # Clean up the tray icon
     icon.stop()
-    sys.exit(0)
+    
+    # Properly terminate the Tkinter mainloop on the main thread
+    if visualizer_root:
+        visualizer_root.after(0, visualizer_root.destroy)
 
 def set_intensity(icon, item):
     global current_settings

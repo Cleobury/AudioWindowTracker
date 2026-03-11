@@ -109,13 +109,23 @@ def apply_directional_audio():
             
             # Panning logic
             is_minimized = win_left <= -30000
+            
+            # Check if maximized
+            is_maximized = False
+            try:
+                placement = win32gui.GetWindowPlacement(hwnd)
+                if placement[1] == win32con.SW_SHOWMAXIMIZED:
+                    is_maximized = True
+            except Exception:
+                pass
+
             is_fullscreen = False
             for m in current_monitors:
                 if win_width >= m.width and win_height >= m.height:
                     is_fullscreen = True
                     break
 
-            if is_minimized or is_fullscreen:
+            if is_minimized or is_fullscreen or (is_maximized and current_settings.get("balance_maximized", True)):
                 panning = 0.0
                 vertical_panning = 0.0
             else:
@@ -252,7 +262,7 @@ logging.info("--- Application Starting ---")
 
 # Settings Management
 settings_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
-current_settings = {"intensity": "Medium"}
+current_settings = {"intensity": "Medium", "balance_maximized": True}
 
 def load_settings():
     global current_settings
@@ -411,9 +421,28 @@ def run_tracker():
     pythoncom.CoUninitialize()
     logging.info("Tracker thread stopping.")
 
+def reset_all_balances():
+    """Reset all active audio sessions back to center balance."""
+    try:
+        pythoncom.CoInitialize()
+        sessions = AudioUtilities.GetAllSessions()
+        for session in sessions:
+            if session.Process:
+                try:
+                    vol_ctrl = session.channelAudioVolume()
+                    if vol_ctrl.GetChannelCount() >= 2:
+                        vol_ctrl.SetChannelVolume(0, 1.0, None)
+                        vol_ctrl.SetChannelVolume(1, 1.0, None)
+                except Exception:
+                    pass
+    except Exception as e:
+        logging.error(f"Failed to reset balances on quit: {e}")
+
 def on_quit(icon, item):
     """Callback to shut down the application."""
     global running
+    logging.info("Quit requested. Resetting balances...")
+    reset_all_balances()
     running = False
     icon.stop()
     sys.exit(0)
@@ -423,6 +452,12 @@ def set_intensity(icon, item):
     current_settings["intensity"] = item.text
     save_settings()
     logging.info(f"Intensity set to {item.text}")
+
+def toggle_balance_maximized(icon, item):
+    global current_settings
+    current_settings["balance_maximized"] = not current_settings.get("balance_maximized", True)
+    save_settings()
+    logging.info(f"Balance when Maximized: {current_settings['balance_maximized']}")
 
 def setup_tray():
     """Initializes and runs the system tray icon."""
@@ -450,6 +485,7 @@ def setup_tray():
         pystray.MenuItem("Audio Window Tracker", lambda: None, enabled=False),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Intensity", intensity_menu),
+        pystray.MenuItem("Balance when Maximized", toggle_balance_maximized, checked=lambda item: current_settings.get("balance_maximized", True)),
         pystray.MenuItem("Toggle Overlay", toggle_overlay),
         pystray.MenuItem("Start with Windows", toggle_autostart, checked=lambda item: is_autostart_enabled()),
         pystray.Menu.SEPARATOR,

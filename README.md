@@ -24,7 +24,8 @@ You'll see a new icon in your tray (bottom right).
 
 *Alternatively, you can manually download `AudioWindowTracker.exe` and double-click to run.*
 
-3. **Autostart**: Right-click the tray icon and check **Start with Windows** if you want it to always be ready.
+### Autostart
+Right-click the tray icon and check **Start with Windows** if you want it to always be ready.
 
 ## Settings
 Right-click the tray icon to tweak the **Intensity**:

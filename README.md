@@ -9,8 +9,21 @@ Ever wish your audio actually came from where the window is on your screen? This
 - **Set & Forget**: Runs quietly in your system tray without getting in the way.
 
 ## Getting Started
-1. **Download**: Grab `AudioWindowTracker.exe`.
-2. **Run**: Double-click to start. You'll see a new icon in your tray (bottom right).
+
+### Installation
+```bash
+winget install AudioWindowTracker
+```
+
+### Running
+To start the app, simply run:
+```bash
+AudioWindowTracker
+```
+You'll see a new icon in your tray (bottom right).
+
+*Alternatively, you can manually download `AudioWindowTracker.exe` and double-click to run.*
+
 3. **Autostart**: Right-click the tray icon and check **Start with Windows** if you want it to always be ready.
 
 ## Settings
